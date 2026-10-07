@@ -23,23 +23,43 @@ jobs:
 
       - name: Build ddnet-libs for iOS
         run: |
+          chmod -R +x ./scripts/
           export M4="$(brew --prefix m4)/bin/m4"
           mkdir -p build-ios-libs
           ./scripts/compile_libs/gen_libs.sh build-ios-libs ios
           find build-ios-libs -type d -name ios -exec rm -rf {} + -prune
           cp -r build-ios-libs/ddnet-libs/. ddnet-libs/
 
-      - name: Build TClient for iOS
+      - name: Build BestClient for iOS
         run: |
-          ./scripts/ios/cmake_ios.sh device TClient org.tclient.app Release build-ios-client
+          rm -rf build-ios-client
+          ./scripts/ios/cmake_ios.sh device BestClient org.bestclient.app Release build-ios-client
           echo "=== Ищем собранный .app ==="
           find build-ios-client -name "*.app" -type d
 
-      - name: Package IPA
+      - name: Verify no libsteam_api link
         run: |
-          APP_PATH=$(find . -name "TClient.app" -type d | head -n 1)
+          APP_PATH=$(find build-ios-client -name "BestClient.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "TClient.app не найден, ищем любой .app..."
+            echo "BestClient.app не найден!"
+            exit 1
+          fi
+          echo "=== Проверка зависимостей бинарника ==="
+          otool -L "$APP_PATH/BestClient" || true
+          echo "=== Проверка Frameworks ==="
+          ls -la "$APP_PATH/Frameworks/" || echo "Frameworks пусто — это хорошо"
+          if otool -L "$APP_PATH/BestClient" | grep -q "libsteam_api"; then
+            echo "ВНИМАНИЕ: бинарник всё ещё ссылается на libsteam_api.dylib!"
+            echo "Проверь, что -DSTEAM=OFF прописан в scripts/ios/cmake_ios.sh"
+            exit 1
+          fi
+          echo "OK: libsteam_api.dylib не линкуется"
+
+      - name: Package IPA with ad-hoc signing
+        run: |
+          APP_PATH=$(find . -name "BestClient.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "BestClient.app не найден, ищем любой .app..."
             APP_PATH=$(find . -name "*.app" -type d | head -n 1)
           fi
           if [ -z "$APP_PATH" ]; then
@@ -50,10 +70,15 @@ jobs:
           echo "Найден: $APP_PATH"
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
-          zip -r TClient.ipa Payload
+          echo "=== Ad-hoc подпись ==="
+          codesign --force --deep --sign - "Payload/BestClient.app"
+          echo "=== Создание IPA ==="
+          zip -r BestClient.ipa Payload
+          echo "=== Структура IPA ==="
+          unzip -l BestClient.ipa | head -20
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: TClient-iOS-IPA
-          path: TClient.ipa
+          name: BestClient-iOS-IPA
+          path: BestClient.ipa
